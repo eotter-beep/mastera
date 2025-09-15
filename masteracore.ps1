@@ -1,47 +1,67 @@
-# Ensure the filename ends with .mst
-if (-Not $SourceFile.EndsWith(".mst")) {
-    $SourceFile += ".mst"
-}
+param(
+    [string]$ScriptFile = "script.mst"
+)
 
-if (-Not (Test-Path $SourceFile)) {
-    Write-Host "Error: File $SourceFile not found."
+if (-Not (Test-Path $ScriptFile)) {
+    Write-Host "Error: File $ScriptFile not found."
     exit
 }
 
-# Read all lines
-$lines = Get-Content $SourceFile
-# Array to store "compiled" commands
+# Store variables
+$vars = @{}
 
-$compiled = @()
+# Read script lines
+$lines = Get-Content $ScriptFile
 
 foreach ($line in $lines) {
     $line = $line.Trim()
     if ($line -eq "" -or $line.StartsWith("#")) { continue }
 
-    # Encode commands into a simple format
+    # PRINT command
     if ($line -like "print: *") {
-        $compiled += "PRINT|" + $line.Substring(6).Trim()
+        $text = $line.Substring(6).Trim()
+        # Replace variables in the text
+        foreach ($v in $vars.Keys) {
+            $text = $text -replace "\$$v", $vars[$v]
+        }
+        Write-Host $text
     }
+    # Variable assignment (x = 5)
+    elseif ($line -match "^(\w+)\s*=\s*(.+)$") {
+        $varName = $matches[1]
+        $expr = $matches[2]
+        # Evaluate arithmetic with existing variables
+        foreach ($v in $vars.Keys) {
+            $expr = $expr -replace "\b$v\b", $vars[$v]
+        }
+        $value = Invoke-Expression $expr
+        $vars[$varName] = $value
+    }
+    if ($line -like "::*") {
+        continue
+    }
+    if ($line -like "end *") {
+        $text = $line.Substring(6).Trim()
+        Stop-Process $text
+    }
+    # IF condition
     elseif ($line -like "if *") {
-        $compiled += "IF|" + $line.Substring(3).Trim()
+        $condition = $line.Substring(3).Trim()
+        foreach ($v in $vars.Keys) {
+            $condition = $condition -replace "\b$v\b", $vars[$v]
+        }
+        $result = Invoke-Expression $condition
+        if (-Not $result) {
+            # Skip to next non-empty/non-comment line (simple)
+            continue
+        }
     }
-    elseif ($line -like "::*") {
-      # This is a commenting function, so leave it empty
-      continue
-    }
-    elseif ($line -like "*+*") {
-        $compiled += "ADD|" + $line
-    }
-    elseif ($line -like "*-*") {
-        $compiled += "SUB|" + $line
+    # Arithmetic expressions (standalone)
+    elseif ($line -match "^[0-9\+\-\*/\s]+$") {
+        $result = Invoke-Expression $line
+        Write-Host $result
     }
     else {
-        $compiled += "UNKNOWN|" + $line
+        Write-Host "Unknown command: $line"
     }
 }
-
-# Write compiled data to a .bin file
-$binFile = [System.IO.Path]::ChangeExtension($SourceFile, ".bin")
-[System.IO.File]::WriteAllLines($binFile, $compiled)
-
-Write-Host "Compiled $SourceFile to $binFile"
